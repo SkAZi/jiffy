@@ -52,6 +52,7 @@ typedef struct {
     size_t          bytes_per_iter;
     int             is_partial;
     int             return_maps;
+    int             atom_keys;
     int             use_nil;
 
     char*           p;
@@ -80,6 +81,7 @@ dec_new(ErlNifEnv* env)
     d->bytes_per_iter = DEFAULT_BYTES_PER_ITER;
     d->is_partial = 0;
     d->return_maps = 0;
+    d->atom_keys = 0;
     d->use_nil = 0;
 
     d->p = NULL;
@@ -184,7 +186,7 @@ dec_pop(Decoder* d, char val)
 }
 
 int
-dec_string(Decoder* d, ERL_NIF_TERM* value)
+dec_string(Decoder* d, ERL_NIF_TERM* value, int can_atom)
 {
     int has_escape = 0;
     int num_escapes = 0;
@@ -194,6 +196,7 @@ dec_string(Decoder* d, ERL_NIF_TERM* value)
     int hi;
     int lo;
     char* chrbuf;
+    ErlNifBinary binbuf;
     int chrpos;
 
     if(d->p[d->i] != '\"') {
@@ -289,6 +292,16 @@ dec_string(Decoder* d, ERL_NIF_TERM* value)
 parse:
     if(!has_escape) {
         *value = enif_make_sub_binary(d->env, d->arg, st, (d->i - st - 1));
+        if(can_atom && d->atom_keys){
+            enif_inspect_binary(d->env, *value, &binbuf);
+
+            chrbuf = malloc(binbuf.size + 1);
+            memcpy(chrbuf, binbuf.data, binbuf.size);
+            chrbuf[binbuf.size] = '\0';
+
+            *value = make_atom(d->env, chrbuf);
+            free(chrbuf);
+        }
         return 1;
     }
 
@@ -710,6 +723,8 @@ decode_init(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 #else
             return enif_make_badarg(env);
 #endif
+        } else if(enif_compare(val, d->atoms->atom_atom_keys) == 0) {
+            d->atom_keys = 1;
         } else if(enif_compare(val, d->atoms->atom_use_nil) == 0) {
             d->use_nil = 1;
         } else {
@@ -814,7 +829,7 @@ decode_iter(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
                         d->i += 5;
                         break;
                     case '\"':
-                        if(!dec_string(d, &val)) {
+                        if(!dec_string(d, &val, 0)) {
                             ret = dec_error(d, "invalid_string");
                             goto done;
                         }
@@ -891,7 +906,7 @@ decode_iter(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
                         d->i++;
                         break;
                     case '\"':
-                        if(!dec_string(d, &val)) {
+                        if(!dec_string(d, &val, 1)) {
                             ret = dec_error(d, "invalid_string");
                             goto done;
                         }
