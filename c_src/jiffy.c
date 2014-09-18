@@ -29,8 +29,6 @@ load(ErlNifEnv* env, void** priv, ERL_NIF_TERM info)
     st->atom_atom_keys = make_atom(env, "atom_keys");
     st->atom_nil = make_atom(env, "nil");
     st->atom_use_nil = make_atom(env, "use_nil");
-    st->atom_undefined = make_atom(env, "undefined");
-    st->atom_use_undefined = make_atom(env, "use_undefined");
 
     // Markers used in encoding
     st->ref_object = make_atom(env, "$object_ref$");

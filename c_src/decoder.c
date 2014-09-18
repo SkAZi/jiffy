@@ -294,13 +294,8 @@ parse:
         *value = enif_make_sub_binary(d->env, d->arg, st, (d->i - st - 1));
         if(can_atom && d->atom_keys){
             enif_inspect_binary(d->env, *value, &binbuf);
-
-            chrbuf = malloc(binbuf.size + 1);
-            memcpy(chrbuf, binbuf.data, binbuf.size);
-            chrbuf[binbuf.size] = '\0';
-
-            *value = make_atom(d->env, chrbuf);
-            free(chrbuf);
+            binbuf.data[binbuf.size] = '\0';
+            *value = make_atom(d->env, (char*) binbuf.data);
         }
         return 1;
     }

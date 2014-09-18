@@ -34,7 +34,6 @@ typedef struct {
     int             uescape;
     int             pretty;
     int             use_nil;
-    int             use_undefined;
 
     int             shiftcnt;
     int             count;
@@ -78,7 +77,6 @@ enc_new(ErlNifEnv* env)
     e->uescape = 0;
     e->pretty = 0;
     e->use_nil = 0;
-    e->use_undefined = 0;
     e->shiftcnt = 0;
     e->count = 0;
 
@@ -590,8 +588,6 @@ encode_init(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
             e->pretty = 1;
         } else if(enif_compare(val, e->atoms->atom_use_nil) == 0) {
             e->use_nil = 1;
-        } else if(enif_compare(val, e->atoms->atom_use_undefined) == 0) {
-            e->use_undefined = 1;
         } else if(enif_compare(val, e->atoms->atom_force_utf8) == 0) {
             // Ignore, handled in Erlang
         } else if(get_bytes_per_iter(env, val, &(e->bytes_per_iter))) {
@@ -723,11 +719,6 @@ encode_iter(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
             stack = enif_make_list_cell(env, e->atoms->ref_array, stack);
             stack = enif_make_list_cell(env, item, stack);
         } else if(enif_compare(curr, e->atoms->atom_null) == 0) {
-            if(!enc_literal(e, "null", 4)) {
-                ret = enc_error(e, "null");
-                goto done;
-            }
-        } else if(e->use_undefined && (enif_compare(curr, e->atoms->atom_undefined) == 0)) {
             if(!enc_literal(e, "null", 4)) {
                 ret = enc_error(e, "null");
                 goto done;
