@@ -31,6 +31,8 @@ typedef struct {
     ERL_NIF_TERM    atom_atom_keys;
     ERL_NIF_TERM    atom_nil;
     ERL_NIF_TERM    atom_use_nil;
+    ERL_NIF_TERM    atom_undefined;
+    ERL_NIF_TERM    atom_use_undefined;
 
     ERL_NIF_TERM    ref_object;
     ERL_NIF_TERM    ref_array;

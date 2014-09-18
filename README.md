@@ -42,6 +42,8 @@ The options for decode are:
 * `return_maps` - Tell Jiffy to return objects using the maps data type
   on VMs that support it. This raises an error on VMs that don't support
   maps.
+* `atom_keys` - Tell Jiffy to return atom keys on objects instead of binary.
+* `use_nil`, `use_undefined` – Tell Jiffy to encode :nil and :undefined as null;
 
 `jiffy:encode/1,2`
 ------------------
@@ -70,6 +72,8 @@ Data Format
     ==========================================================================
 
     null                       -> null           -> null
+    nil                        -> null           -> nil
+    undefined                  -> null           -> null
     true                       -> true           -> true
     false                      -> false          -> false
     "hi"                       -> [104, 105]     -> [104, 105]
