@@ -29,11 +29,12 @@ typedef struct {
     ErlNifEnv*      env;
     jiffy_st*       atoms;
 
-    size_t          bytes_per_iter;
+    size_t          bytes_per_red;
 
     int             uescape;
     int             pretty;
     int             use_nil;
+    int             escape_forward_slashes;
 
     int             shiftcnt;
     int             count;
@@ -73,10 +74,11 @@ enc_new(ErlNifEnv* env)
     Encoder* e = enif_alloc_resource(st->res_enc, sizeof(Encoder));
 
     e->atoms = st;
-    e->bytes_per_iter = DEFAULT_BYTES_PER_ITER;
+    e->bytes_per_red = DEFAULT_BYTES_PER_REDUCTION;
     e->uescape = 0;
     e->pretty = 0;
     e->use_nil = 0;
+    e->escape_forward_slashes = 0;
     e->shiftcnt = 0;
     e->count = 0;
 
@@ -198,7 +200,7 @@ enc_unknown(Encoder* e, ERL_NIF_TERM value)
 
     e->iolist = enif_make_list_cell(e->env, value, e->iolist);
     e->iolen++;
-    
+
     // Track the total number of bytes produced before
     // splitting our IO buffer. We add 16 to this value
     // as a rough estimate of the number of bytes that
@@ -219,7 +221,7 @@ enc_unknown(Encoder* e, ERL_NIF_TERM value)
 
         e->p = (char*) e->curr->data;
         e->u = (unsigned char*) e->curr->data;
-        e->i = 0;        
+        e->i = 0;
     }
 
     return 1;
@@ -281,6 +283,12 @@ enc_string(Encoder* e, ERL_NIF_TERM val)
                 esc_extra += 1;
                 i++;
                 continue;
+            case '/':
+                if(e->escape_forward_slashes) {
+                    esc_extra += 1;
+                    i++;
+                    continue;
+                }
             default:
                 if(data[i] < 0x20) {
                     esc_extra += 5;
@@ -348,6 +356,13 @@ enc_string(Encoder* e, ERL_NIF_TERM val)
                 e->p[e->i++] = 't';
                 i++;
                 continue;
+            case '/':
+                if(e->escape_forward_slashes) {
+                    e->p[e->i++] = '\\';
+                    e->u[e->i++] = data[i];
+                    i++;
+                    continue;
+                }
             default:
                 if(data[i] < 0x20) {
                     ulen = unicode_uescape(data[i], &(e->p[e->i]));
@@ -393,7 +408,7 @@ enc_long(Encoder* e, ErlNifSInt64 val)
     }
 
 #if (defined(__WIN32__) || defined(_WIN32) || defined(_WIN32_))
-    snprintf(&(e->p[e->i]), 32, "%ld", val);
+    snprintf(&(e->p[e->i]), 32, "%lld", val);
 #elif SIZEOF_LONG == 8
     snprintf(&(e->p[e->i]), 32, "%ld", val);
 #else
@@ -526,7 +541,6 @@ enc_map_to_ejson(ErlNifEnv* env, ERL_NIF_TERM map, ERL_NIF_TERM* out)
     ERL_NIF_TERM val;
 
     if(!enif_get_map_size(env, map, &size)) {
-        fprintf(stderr, "bad map size\r\n");
         return 0;
     }
 
@@ -538,18 +552,19 @@ enc_map_to_ejson(ErlNifEnv* env, ERL_NIF_TERM map, ERL_NIF_TERM* out)
     }
 
     if(!enif_map_iterator_create(env, map, &iter, ERL_NIF_MAP_ITERATOR_HEAD)) {
-        fprintf(stderr, "bad iterator create\r\n");
         return 0;
     }
 
     do {
         if(!enif_map_iterator_get_pair(env, &iter, &key, &val)) {
-            fprintf(stderr, "bad get pair\r\n");
+            enif_map_iterator_destroy(env, &iter);
             return 0;
         }
         tuple = enif_make_tuple2(env, key, val);
         list = enif_make_list_cell(env, tuple, list);
     } while(enif_map_iterator_next(env, &iter));
+
+    enif_map_iterator_destroy(env, &iter);
 
     *out = enif_make_tuple1(env, list);
     return 1;
@@ -591,11 +606,15 @@ encode_init(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
             e->uescape = 1;
         } else if(enif_compare(val, e->atoms->atom_pretty) == 0) {
             e->pretty = 1;
+        } else if(enif_compare(val, e->atoms->atom_escape_forward_slashes) == 0) {
+            e->escape_forward_slashes = 1;
         } else if(enif_compare(val, e->atoms->atom_use_nil) == 0) {
             e->use_nil = 1;
         } else if(enif_compare(val, e->atoms->atom_force_utf8) == 0) {
             // Ignore, handled in Erlang
-        } else if(get_bytes_per_iter(env, val, &(e->bytes_per_iter))) {
+        } else if(get_bytes_per_iter(env, val, &(e->bytes_per_red))) {
+            continue;
+        } else if(get_bytes_per_red(env, val, &(e->bytes_per_red))) {
             continue;
         } else {
             return enif_make_badarg(env);
@@ -622,7 +641,7 @@ encode_iter(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     double dval;
 
     size_t start;
-    size_t processed;
+    size_t bytes_written = 0;
 
     if(argc != 3) {
         return enif_make_badarg(env);
@@ -645,9 +664,9 @@ encode_iter(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 
     while(!enif_is_empty_list(env, stack)) {
 
-        processed = (e->iosize + e->i) - start;
-        if(should_yield(processed, e->bytes_per_iter)) {
-            consume_timeslice(env, processed, e->bytes_per_iter);
+        bytes_written += (e->iosize + e->i) - start;
+
+        if(should_yield(env, &bytes_written, e->bytes_per_red)) {
             return enif_make_tuple4(
                     env,
                     st->atom_iter,
@@ -853,8 +872,6 @@ encode_iter(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     }
 
 done:
-    processed = (e->iosize + e->i) - start;
-    consume_timeslice(env, processed, e->bytes_per_iter);
 
     return ret;
 }

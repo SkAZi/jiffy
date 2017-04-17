@@ -49,11 +49,13 @@ typedef struct {
     ERL_NIF_TERM    arg;
     ErlNifBinary    bin;
 
-    size_t          bytes_per_iter;
+    size_t          bytes_per_red;
     int             is_partial;
     int             return_maps;
     int             atom_keys;
     int             use_nil;
+    int             return_trailer;
+    ERL_NIF_TERM    null_term;
 
     char*           p;
     unsigned char*  u;
@@ -78,11 +80,13 @@ dec_new(ErlNifEnv* env)
 
     d->atoms = st;
 
-    d->bytes_per_iter = DEFAULT_BYTES_PER_ITER;
+    d->bytes_per_red = DEFAULT_BYTES_PER_REDUCTION;
     d->is_partial = 0;
     d->return_maps = 0;
     d->atom_keys = 0;
     d->use_nil = 0;
+    d->return_trailer = 0;
+    d->null_term = d->atoms->atom_null;
 
     d->p = NULL;
     d->u = NULL;
@@ -710,7 +714,9 @@ decode_init(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     }
 
     while(enif_get_list_cell(env, opts, &val, &opts)) {
-        if(get_bytes_per_iter(env, val, &(d->bytes_per_iter))) {
+        if(get_bytes_per_iter(env, val, &(d->bytes_per_red))) {
+            continue;
+        } else if(get_bytes_per_red(env, val, &(d->bytes_per_red))) {
             continue;
         } else if(enif_compare(val, d->atoms->atom_return_maps) == 0) {
 #if MAP_TYPE_PRESENT
@@ -720,8 +726,13 @@ decode_init(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 #endif
         } else if(enif_compare(val, d->atoms->atom_atom_keys) == 0) {
             d->atom_keys = 1;
+        } else if(enif_compare(val, d->atoms->atom_return_trailer) == 0) {
+            d->return_trailer = 1;
         } else if(enif_compare(val, d->atoms->atom_use_nil) == 0) {
             d->use_nil = 1;
+            d->null_term = d->atoms->atom_nil;
+        } else if(get_null_term(env, val, &(d->null_term))) {
+            continue;
         } else {
             return enif_make_badarg(env);
         }
@@ -741,8 +752,9 @@ decode_iter(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     ERL_NIF_TERM objs;
     ERL_NIF_TERM curr;
     ERL_NIF_TERM val = argv[2];
+    ERL_NIF_TERM trailer;
     ERL_NIF_TERM ret;
-    size_t start;
+    size_t bytes_read = 0;
 
     if(argc != 5) {
         return enif_make_badarg(env);
@@ -760,12 +772,8 @@ decode_iter(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     objs = argv[3];
     curr = argv[4];
 
-    //fprintf(stderr, "Parsing:\r\n");
-    start = d->i;
     while(d->i < bin.size) {
-        //fprintf(stderr, "state: %d\r\n", dec_curr(d));
-        if(should_yield(d->i - start, d->bytes_per_iter)) {
-            consume_timeslice(env, d->i - start, d->bytes_per_iter);
+        if(should_yield(env, &bytes_read, d->bytes_per_red)) {
             return enif_make_tuple5(
                     env,
                     st->atom_iter,
@@ -775,6 +783,9 @@ decode_iter(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
                     curr
                 );
         }
+
+        bytes_read += 1;
+
         switch(dec_curr(d)) {
             case st_value:
                 switch(d->p[d->i]) {
@@ -793,7 +804,7 @@ decode_iter(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
                             ret = dec_error(d, "invalid_literal");
                             goto done;
                         }
-                        val = d->use_nil ? d->atoms->atom_nil : d->atoms->atom_null;
+                        val = d->null_term;
                         dec_pop(d, st_value);
                         d->i += 4;
                         break;
@@ -1038,8 +1049,7 @@ decode_iter(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
                         d->i++;
                         break;
                     default:
-                        ret = dec_error(d, "invalid_trailing_data");
-                        goto done;
+                        goto decode_done;
                 }
                 break;
 
@@ -1047,6 +1057,16 @@ decode_iter(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
                 ret = dec_error(d, "invalid_internal_state");
                 goto done;
         }
+    }
+
+decode_done:
+
+    if(d->i < bin.size && d->return_trailer) {
+        trailer = enif_make_sub_binary(env, argv[0], d->i, bin.size - d->i);
+        val = enif_make_tuple3(env, d->atoms->atom_has_trailer, val, trailer);
+    } else if(d->i < bin.size) {
+        ret = dec_error(d, "invalid_trailing_data");
+        goto done;
     }
 
     if(dec_curr(d) != st_done) {
@@ -1058,6 +1078,5 @@ decode_iter(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
     }
 
 done:
-    consume_timeslice(env, d->i - start, d->bytes_per_iter);
     return ret;
 }
